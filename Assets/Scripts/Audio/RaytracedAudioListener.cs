@@ -1,64 +1,67 @@
 using UnityEngine;
 using UnityEngine.Audio;
-using System.Collections.Generic;
 
+[RequireComponent(typeof(AudioListener))]
 public class RaytracedAudioListener : MonoBehaviour
 {
-    public LayerMask occlusionMask;
-    public int maxReflections = 1;
-    public AudioMixer mixer;
-    public float reverbMaxDistance = 40f;
+    [Header("Audio Mixer Settings")]
+    public AudioMixer mixer;                  // Assign your main audio mixer here
+    public string reflectionParam = "ReflectionStrength"; // exposed param in mixer
+    public string reverbParam = "ReverbFactor";           // exposed param in mixer
 
-    private List<RaytracedAudioSource> audioSources;
+    [Header("Environment Sampling")]
+    public LayerMask environmentMask;         // layers for walls/floors/ceilings
+    public int rayCount = 64;                 // number of rays for sampling
+    public float maxDistance = 20f;           // max raycast distance
 
-    void Start()
-    {
-        audioSources = new List<RaytracedAudioSource>(FindObjectsOfType<RaytracedAudioSource>());
-    }
+    [Header("Update Settings")]
+    public float updateInterval = 0.2f;       // seconds between samples
+    private float timeSinceLastUpdate = 0f;
 
     void Update()
     {
-        foreach (var source in audioSources)
+        timeSinceLastUpdate += Time.deltaTime;
+        if (timeSinceLastUpdate >= updateInterval)
         {
-            SimulateAudioRaytracing(source);
+            timeSinceLastUpdate = 0f;
+            UpdateEnvironmentAcoustics();
         }
     }
 
-    void SimulateAudioRaytracing(RaytracedAudioSource ras)
+    void UpdateEnvironmentAcoustics()
     {
-        Vector3 dir = ras.transform.position - transform.position;
-        float distance = dir.magnitude;
-        Ray ray = new Ray(transform.position, dir.normalized);
+        Vector3 origin = transform.position;
+        float totalDistance = 0f;
+        int hits = 0;
 
-        bool blocked = Physics.Raycast(ray, distance, occlusionMask);
-
-        // Muffle if blocked
-        mixer.SetFloat("LowpassCutoff", blocked ? 800f : 22000f);
-
-        // Echo approximation
-        if (Physics.Raycast(ras.transform.position, -dir.normalized, out RaycastHit reflectionHit, distance, occlusionMask))
+        for (int i = 0; i < rayCount; i++)
         {
-            float echoVolume = ras.reflectionStrength / Mathf.Max(1f, reflectionHit.distance);
-            mixer.SetFloat("EchoVolume", echoVolume * 0.5f);
-        }
-        else
-        {
-            mixer.SetFloat("EchoVolume", 0f);
-        }
+            Vector3 dir = Random.onUnitSphere;
 
-        // Reverb approximation based on open space
-        float opennessFactor = 1f;
-        int hitCount = 0;
-
-        for (int i = 0; i < 4; i++)
-        {
-            Vector3 randomDir = Random.onUnitSphere;
-            if (Physics.Raycast(transform.position, randomDir, out _, reverbMaxDistance, occlusionMask))
-                hitCount++;
+            if (Physics.Raycast(origin, dir, out RaycastHit hit, maxDistance, environmentMask))
+            {
+                totalDistance += hit.distance;
+                hits++;
+            }
+            else
+            {
+                totalDistance += maxDistance;
+                hits++;
+            }
         }
 
-        opennessFactor = 1f - (hitCount / 4f); // how open the space is
-        float reverbLevel = ras.reverbFactor * opennessFactor;
-        mixer.SetFloat("ReverbAmount", reverbLevel);
+        float avgDistance = hits > 0 ? totalDistance / hits : maxDistance;
+
+        float reflectionStrength = Mathf.InverseLerp(0f, maxDistance, avgDistance);
+        float reverbFactor = Mathf.InverseLerp(0f, maxDistance, avgDistance);
+
+        reflectionStrength = Mathf.Clamp(reflectionStrength, 0.1f, 1f);
+        reverbFactor = Mathf.Clamp(reverbFactor, 0f, 1f);
+
+        mixer.SetFloat(reflectionParam, reflectionStrength);
+        mixer.SetFloat(reverbParam, reverbFactor);
+
+        // Optional: debug log to check values in real time
+        // Debug.Log($"Reflection: {reflectionStrength:F2}, Reverb: {reverbFactor:F2}");
     }
 }
