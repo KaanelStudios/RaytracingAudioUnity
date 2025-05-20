@@ -4,26 +4,21 @@ using UnityEngine.Audio;
 [RequireComponent(typeof(AudioListener))]
 public class RaytracedAudioListener : MonoBehaviour
 {
-    [Header("Audio Mixer Settings")]
-    public AudioMixer mixer;                  // Assign your main audio mixer here
-    public string reflectionParam = "ReflectionStrength"; // exposed param in mixer
-    public string reverbParam = "ReverbFactor";           // exposed param in mixer
+    public AudioMixer mixer;
+    public LayerMask environmentMask;
 
-    [Header("Environment Sampling")]
-    public LayerMask environmentMask;         // layers for walls/floors/ceilings
-    public int rayCount = 64;                 // number of rays for sampling
-    public float maxDistance = 20f;           // max raycast distance
+    [Range(0.5f, 10f)] public float updateInterval = 1f;
+    [Range(5, 100)] public int rayCount = 32;
+    [Range(1f, 50f)] public float maxDistance = 20f;
 
-    [Header("Update Settings")]
-    public float updateInterval = 0.2f;       // seconds between samples
-    private float timeSinceLastUpdate = 0f;
+    private float timer;
 
     void Update()
     {
-        timeSinceLastUpdate += Time.deltaTime;
-        if (timeSinceLastUpdate >= updateInterval)
+        timer += Time.deltaTime;
+        if (timer >= updateInterval)
         {
-            timeSinceLastUpdate = 0f;
+            timer = 0f;
             UpdateEnvironmentAcoustics();
         }
     }
@@ -33,14 +28,16 @@ public class RaytracedAudioListener : MonoBehaviour
         Vector3 origin = transform.position;
         float totalDistance = 0f;
         int hits = 0;
+        int blockedCount = 0;
 
         for (int i = 0; i < rayCount; i++)
         {
-            Vector3 dir = Random.onUnitSphere;
 
+            Vector3 dir = Random.onUnitSphere;
             if (Physics.Raycast(origin, dir, out RaycastHit hit, maxDistance, environmentMask))
             {
                 totalDistance += hit.distance;
+                blockedCount++;
                 hits++;
             }
             else
@@ -48,20 +45,26 @@ public class RaytracedAudioListener : MonoBehaviour
                 totalDistance += maxDistance;
                 hits++;
             }
+            Debug.DrawRay(origin, dir * hit.distance, Color.red, 1f);
+
         }
 
         float avgDistance = hits > 0 ? totalDistance / hits : maxDistance;
 
-        float reflectionStrength = Mathf.InverseLerp(0f, maxDistance, avgDistance);
-        float reverbFactor = Mathf.InverseLerp(0f, maxDistance, avgDistance);
-
+        // Reflection strength
+        float reflectionStrength = Mathf.Clamp01(avgDistance / maxDistance);
         reflectionStrength = Mathf.Clamp(reflectionStrength, 0.1f, 1f);
-        reverbFactor = Mathf.Clamp(reverbFactor, 0f, 1f);
 
-        mixer.SetFloat(reflectionParam, reflectionStrength);
-        mixer.SetFloat(reverbParam, reverbFactor);
+        // Reverb factor (same as reflection for simplicity)
+        float reverbFactor = reflectionStrength;
 
-        // Optional: debug log to check values in real time
-        // Debug.Log($"Reflection: {reflectionStrength:F2}, Reverb: {reverbFactor:F2}");
+        // Muffle amount (based on how many rays hit something)
+        float muffleFactor = Mathf.InverseLerp(0f, rayCount, blockedCount);
+        float cutoffFreq = Mathf.Lerp(22000f, 80, muffleFactor); // Hz
+
+        // Send values to mixer
+        mixer.SetFloat("ReflectionStrength", Mathf.Lerp(-80f, 0f, reflectionStrength)); // dB
+        mixer.SetFloat("ReverbFactor", Mathf.Lerp(-80f, 0f, reverbFactor));             // dB
+        mixer.SetFloat("MuffleAmount", cutoffFreq);                                     // Hz
     }
 }
